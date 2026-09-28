@@ -1,121 +1,136 @@
 ﻿using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Menu;
-using Microsoft.Extensions.Logging;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using MenuManager;
 
-namespace MenuManager
+namespace MenuManagerCore;
+
+public class MenuInstance(
+    string title,
+    Action<CCSPlayerController>? backAction = null,
+    Action<CCSPlayerController>? resetAction = null,
+    MenuType forcetype = MenuType.Default)
+    : IMenu
 {
-    public class MenuInstance : IMenu
+    public readonly Action<CCSPlayerController>? BackAction = backAction;
+    public readonly Action<CCSPlayerController>? ResetAction = resetAction;
+    private MenuType _forcetype = forcetype;
+
+    public string Title { get; set; } = title;
+
+    public List<ChatMenuOption> MenuOptions { get; } = [];
+
+    public bool ExitButton { get; set; } = true;
+
+    public PostSelectAction PostSelectAction { get; set; } = PostSelectAction.Nothing;
+
+    public ChatMenuOption AddMenuOption(string display, Action<CCSPlayerController, ChatMenuOption> onSelect,
+        bool disabled = false)
     {
-        public Action<CCSPlayerController> BackAction;
-        public Action<CCSPlayerController> ResetAction;
+        ChatMenuOption option = new(display, disabled, onSelect);
+        MenuOptions.Add(option);
+        return option;
+    }
 
-        MenuType forcetype;
+    public void Open(CCSPlayerController player)
+    {
+        IMenu? menu = null;
 
-        public MenuInstance(string _title, Action<CCSPlayerController> _back_action = null, Action<CCSPlayerController> _reset_action = null, MenuType _forcetype = MenuType.Default)
+        if (_forcetype == MenuType.Default)
         {
-            Title = _title;
-            ExitButton = true;
-            MenuOptions = new List<ChatMenuOption>();
-            BackAction = _back_action;
-            forcetype = _forcetype;
-            ResetAction = _reset_action;
+            _forcetype = Misc.GetCurrentPlayerMenu(player);
         }
 
-        public string Title {get;set;}
-                
-        public List<ChatMenuOption> MenuOptions { get; }
-
-        public bool ExitButton { get; set; }
-
-        public PostSelectAction PostSelectAction { get; set; } = PostSelectAction.Nothing;
-
-        public ChatMenuOption AddMenuOption(string display, Action<CCSPlayerController, ChatMenuOption> onSelect, bool disabled = false)
+        if (_forcetype == MenuType.MetamodMenu && !MenusMm.Hooked())
         {
-            var option = new ChatMenuOption(display, disabled, (p, opt) => onSelect(p, opt));
-            MenuOptions.Add(option);
-            return option;            
+            _forcetype = MenuType.ButtonMenu;
         }
 
-        public void OnBackAction(CCSPlayerController player)
+        menu = _forcetype switch
         {
-            if (BackAction != null)
+            MenuType.ChatMenu => new ChatMenu(Title),
+            MenuType.ConsoleMenu => new ConsoleMenu(Title),
+            MenuType.CenterMenu => new CenterHtmlMenu(Title,
+                Control.GetPlugin() ?? throw new InvalidOperationException()),
+            MenuType.ButtonMenu => new ButtonMenu(Title),
+            MenuType.MetamodMenu => new ButtonMenu(Title, true),
+            _ => menu
+        };
+
+        if (menu == null)
+        {
+            return;
+        }
+
+        menu.ExitButton = ExitButton;
+        menu.PostSelectAction = PostSelectAction;
+
+        if (BackAction != null)
+        {
+            _ = menu.AddMenuOption(
+                Control.GetPlugin()?.Localizer["menumanager.back"] ?? throw new InvalidOperationException(),
+                (p, _) =>
+                {
+                    if (p != null)
+                    {
+                        OnBackAction(p);
+                    }
+                });
+        }
+
+        if (_forcetype == MenuType.ButtonMenu)
+        {
+            ((ButtonMenu)menu).BackAction = OnBackAction;
+            ((ButtonMenu)menu).ResetAction = OnResetAction;
+        }
+        else
+        {
+            bool flag = _forcetype == MenuType.CenterMenu;
+            menu.Title = Misc.ColorText(menu.Title, flag);
+            foreach (ChatMenuOption t in MenuOptions)
             {
-                Control.PlaySound(player, Control.GetPlugin().Config.SoundBack);
-                BackAction(player);
+                t.Text = Misc.ColorText(t.Text, flag);
             }
         }
 
-        public void OnResetAction(CCSPlayerController player)
+        foreach (ChatMenuOption option in MenuOptions)
         {
-            if (ResetAction != null)
-                ResetAction(player);
-            else
-                Control.GetPlugin().Logger.LogWarning($"Reset action is not passed to func! TITLE: {Title}");
+            _ = menu.AddMenuOption(option.Text, option.OnSelect, option.Disabled);
         }
 
-        public void Open(CCSPlayerController player)
+        if (Control.GetPlugin()!.Config.UseMetamodMenu &&
+            ((Control.GetPlugin()!.Config.UseMetamodMenuReplace && _forcetype == MenuType.ButtonMenu) ||
+             _forcetype == MenuType.MetamodMenu))
         {
-            IMenu menu = null;
-
-            if (forcetype == MenuType.Default)
-                forcetype = Misc.GetCurrentPlayerMenu(player);
-
-            if (forcetype == MenuType.MetamodMenu && !MenusMM.Hooked())
-                forcetype = MenuType.ButtonMenu;
-
-            switch (forcetype)
-            {
-                case MenuType.ChatMenu: menu = new ChatMenu(Title); break;
-                case MenuType.ConsoleMenu: menu = new ConsoleMenu(Title);  break;
-                case MenuType.CenterMenu: menu = new CenterHtmlMenu(Title, Control.GetPlugin()); break;
-                case MenuType.ButtonMenu: menu = new ButtonMenu(Title, false);  break;
-                case MenuType.MetamodMenu: menu = new ButtonMenu(Title, true);  break;
-            }
-
-            menu.ExitButton = ExitButton;
-            menu.PostSelectAction = PostSelectAction;
-
-            if (BackAction != null)
-            {
-                menu.AddMenuOption(Control.GetPlugin().Localizer["menumanager.back"], (p,d) => OnBackAction(p));                
-
-            }
-
-            if (forcetype == MenuType.ButtonMenu)
-            {
-                ((ButtonMenu)menu).BackAction = OnBackAction;
-                ((ButtonMenu)menu).ResetAction = OnResetAction;
-            }
-            else
-            {
-                var flag = forcetype == MenuType.CenterMenu;
-                menu.Title = Misc.ColorText(menu.Title, flag);
-                for (int i = 0; i < MenuOptions.Count; i++)
-                    MenuOptions[i].Text = Misc.ColorText(MenuOptions[i].Text, flag);
-            }
-
-
-                foreach (var option in MenuOptions)
-                    menu.AddMenuOption(option.Text, option.OnSelect, option.Disabled);
-            
-            if (Control.GetPlugin().Config.UseMetamodMenu && ((Control.GetPlugin().Config.UseMetamodMenuReplace && forcetype == MenuType.ButtonMenu) || (forcetype == MenuType.MetamodMenu)))
-                MenusMM.PassMenuToMM(player, this);
-            else
-            {                
-                MenusMM.ClosePlayerMenu(player.Slot);
-                menu.Open(player);                
-            }
+            MenusMm.PassMenuToMm(player, this);
         }
-
-        public void OpenToAll()
+        else
         {
-            foreach (var player in Misc.GetValidPlayers())
-                Open(player);
+            MenusMm.ClosePlayerMenu(player.Slot);
+            menu.Open(player);
         }
+    }
+
+    public void OpenToAll()
+    {
+        foreach (CCSPlayerController player in Misc.GetValidPlayers())
+        {
+            Open(player);
+        }
+    }
+
+    private void OnBackAction(CCSPlayerController player)
+    {
+        string? configSoundBack = Control.GetPlugin()?.Config.SoundBack;
+        if (configSoundBack != null)
+        {
+            Control.PlaySound(player, configSoundBack);
+        }
+
+        BackAction?.Invoke(player);
+    }
+
+    private void OnResetAction(CCSPlayerController player)
+    {
+        ResetAction?.Invoke(player);
     }
 }
